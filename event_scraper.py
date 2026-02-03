@@ -4,7 +4,6 @@ import requests
 from bs4 import BeautifulSoup
 import pandas as pd
 import datetime
-import hashlib
 import os
 import sys
 
@@ -15,11 +14,6 @@ CITY_URLS = {
     "delhi": "https://in.bookmyshow.com/explore/events-national-capital-region-ncr",
     "bangalore": "https://in.bookmyshow.com/explore/events-bengaluru",
     "gurgaon": "https://in.bookmyshow.com/explore/events-gurugram"
-}
-
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
 }
 
 from playwright.sync_api import sync_playwright
@@ -100,19 +94,7 @@ def get_event_status(event_date):
     else:
         return "Expired"
 
-def deduplicate_events(df):
-    """
-    Removes duplicate events based on the Event URL.
-    If URL is missing, falls back to a hash of (Name + Venue + Date).
-    """
-    if df.empty:
-        return df
 
-    initial_count = len(df)
-    df = df.drop_duplicates(subset=['Event URL'], keep='first')
-    
-    print(f"Deduplication: Removed {initial_count - len(df)} duplicates.")
-    return df
 
 def parse_events(html_content, city_name):
     """
@@ -222,28 +204,15 @@ def main():
     today = datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
 
     def update_status_row(row):
-        # If we have a scraped date object, use logic. 
-        # Note: Data loaded from Excel might be strings or Timestamp objects.
+        # Use existing parsing logic to determine status
         try:
             raw_date = row['Date'] # e.g. "Sun, 9 Feb"
             if not isinstance(raw_date, str): 
-                # If Excel converted it or it's empty
                 return "Unknown"
             
-            # Re-parse logic (simplified for immediate update)
-            clean_str = raw_date.split(" onwards")[0].strip()
-            # Try parsing with current year
-            # Note: This is a simple re-check. Ideally, we store the actual parsed date object in a hidden column.
-            # For this assignment, we re-parse the display string.
-            try:
-                dt = datetime.datetime.strptime(f"{clean_str} {current_year}", "%a, %d %b %Y")
-                return "Upcoming" if dt >= today else "Expired"
-            except:
-                try:
-                    dt = datetime.datetime.strptime(f"{clean_str} {current_year}", "%d %b %Y")
-                    return "Upcoming" if dt >= today else "Expired"
-                except:
-                    return "Unknown"
+            # Use main parsing function
+            event_date = parse_date(raw_date)
+            return get_event_status(event_date)
         except:
             return "Unknown"
 

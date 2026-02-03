@@ -3,10 +3,11 @@ from flask import Flask, render_template, jsonify, request
 import subprocess
 import os
 import sys
+from event_scraper import CITY_URLS
 
 # Initialize Flask app
 # We use standard folder structure: templates/ for HTML, static/ for CSS/JS
-app = Flask(__name__, template_folder='templates', static_folder='static')
+app = Flask(__name__)
 
 @app.route('/')
 def home():
@@ -24,9 +25,10 @@ def run_scraper():
         data = request.get_json() or {}
         city = data.get('city', 'jaipur').lower()
         
+        
         # Validate city to prevent arbitrary command execution or weird filenames
-        allowed_cities = ['jaipur', 'mumbai', 'delhi', 'bangalore', 'gurgaon']
-        if city not in allowed_cities:
+        # Dynamically support cities defined in the scraper config
+        if city not in CITY_URLS:
              return jsonify({
                 "status": "error", 
                 "message": f"Invalid city selected: {city}"
