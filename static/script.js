@@ -1,3 +1,4 @@
+//This Project is Created By Prashant Sharma
 document.addEventListener('DOMContentLoaded', () => {
     const fetchBtn = document.getElementById('fetch-btn');
     const citySelect = document.getElementById('city-select');
@@ -14,7 +15,7 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             // 2. Prepare Payload (in case we add city selection logic later)
             const selectedCity = citySelect.value;
-            
+
             // 3. Call Backend
             // Note: In a real app, we might send { city: selectedCity }
             const response = await fetch('/run-scraper', {
