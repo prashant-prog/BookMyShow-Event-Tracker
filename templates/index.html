@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pixie Event Tracker</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+
+<body>
+
+    <div class="container">
+        <header>
+            <h1>Event Discovery Tool</h1>
+            <p>Track local events for Pixie Photobooth</p>
+        </header>
+
+        <main>
+            <div class="control-panel">
+                <label for="city-select">Select City:</label>
+                <select id="city-select">
+                    <option value="jaipur" selected>Jaipur</option>
+                    <option value="mumbai">Mumbai</option>
+                    <option value="delhi">Delhi</option>
+                    <option value="bangalore">Bangalore</option>
+                    <option value="gurgaon">Gurgaon</option>
+                </select>
+
+                <button id="fetch-btn" class="primary-btn">
+                    <span id="btn-text">Fetch / Update Events</span>
+                    <span id="btn-spinner" class="spinner hidden"></span>
+                </button>
+            </div>
+
+            <div id="status-container" class="status-box hidden">
+                <p id="status-message"></p>
+            </div>
+        </main>
+
+        <footer>
+            <p>&copy; 2026 Pixie Photobooth Intern Project</p>
+        </footer>
+    </div>
+
+    <script src="/static/script.js"></script>
+</body>
+
+</html>
