@@ -93,6 +93,20 @@ To automate this script to run daily at 8:00 AM:
 0 8 * * * /path/to/your/venv/bin/python /path/to/project/event_scraper.py jaipur
 ```
 
+## ❓ Troubleshooting
+
+### Playwright Browser Issues
+If you see an error like `Executable doesn't exist at ...`, run:
+```bash
+playwright install chromium
+```
+
+### Timeout Errors
+If the scraper times out:
+1.  Check your internet connection.
+2.  The script waits up to 60 seconds. You can increase the `timeout` in `event_scraper.py` if needed.
+3.  Ensure `headless=True` in `event_scraper.py` (default).
+
 ## 📝 Technologies Used
 - **Python**: Core logic.
 - **Playwright**: Browser automation & scraping.
