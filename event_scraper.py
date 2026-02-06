@@ -1,13 +1,18 @@
-#This Project is Created by Prashant Sharma
+# This Project is Created by Prashant Sharma
 
-import requests
-from bs4 import BeautifulSoup
-import pandas as pd
-import datetime
 import os
 import sys
+import logging
+import datetime
+import pandas as pd
+from bs4 import BeautifulSoup
+from playwright.sync_api import sync_playwright
 
 # --- Configuration ---
+LOG_FORMAT = '%(asctime)s - %(levelname)s - %(message)s'
+logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
+logger = logging.getLogger(__name__)
+
 CITY_URLS = {
     "jaipur": "https://in.bookmyshow.com/explore/events-jaipur",
     "mumbai": "https://in.bookmyshow.com/explore/events-mumbai",
@@ -16,214 +21,215 @@ CITY_URLS = {
     "gurgaon": "https://in.bookmyshow.com/explore/events-gurugram"
 }
 
-from playwright.sync_api import sync_playwright
+STATUS_UPCOMING = "Upcoming"
+STATUS_EXPIRED = "Expired"
+STATUS_UNKNOWN = "Unknown"
 
-def fetch_page(url):
-    """
-    Fetches the HTML content of the page using Playwright.
-    This bypasses basic bot protections and renders JS content.
-    """
-    try:
-        with sync_playwright() as p:
-            # Launch browser in headless mode
-            browser = p.chromium.launch(headless=True)
+class EventScraper:
+    def __init__(self, city):
+        self.city = city.lower()
+        self.url = CITY_URLS.get(self.city)
+        if not self.url:
+            raise ValueError(f"City '{city}' not supported. Supported: {', '.join(CITY_URLS.keys())}")
+        self.output_file = f"events_{self.city}.xlsx"
+
+    def fetch_page(self):
+        """
+        Fetches the HTML content of the page using Playwright.
+        """
+        logger.info(f"Navigating to {self.url}...")
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                context = browser.new_context(
+                    user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                )
+                page = context.new_page()
+                
+                # Increased timeout to 60s for slow networks
+                page.goto(self.url, timeout=60000, wait_until="domcontentloaded")
+                
+                # Wait for at least one anchor with '/events/' in href
+                try:
+                    page.wait_for_selector('a[href*="/events/"]', timeout=15000)
+                except Exception:
+                    logger.warning("Timeout waiting for event cards. Page might be empty or structure changed.")
+
+                content = page.content()
+                browser.close()
+                return content
+
+        except Exception as e:
+            logger.error(f"Error extracting with Playwright: {e}")
+            return None
+
+    @staticmethod
+    def parse_date(date_str):
+        """
+        Parses BookMyShow date strings. Returns datetime object or None.
+        """
+        if not date_str or not isinstance(date_str, str):
+            return None
             
-            # Create a new context with user agent to look like a real browser
-            context = browser.new_context(
-                user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            )
-            page = context.new_page()
-            
-            print(f"Navigating to {url}...")
-            # increased timeout to 60s for slow networks
-            page.goto(url, timeout=60000, wait_until="domcontentloaded")
-            
-            # Wait for event cards to load. 
-            # We look for a common container or just wait for network idle if selectors are unstable.
-            # 'div' with specific text is a simple heuristic if classes are obfuscated.
-            # Better strategy: Wait for at least one anchor with '/events/' in href
+        clean_str = date_str.split(" onwards")[0].strip()
+        current_year = datetime.datetime.now().year
+        
+        # Formats to try
+        date_formats = ["%a, %d %b", "%d %b"]
+        
+        for fmt in date_formats:
             try:
-                page.wait_for_selector('a[href*="/events/"]', timeout=15000)
-            except Exception:
-                print("Warning: Timeout waiting for event cards. Page might be empty or struct changed.")
-
-            # Get the fully rendered HTML
-            content = page.content()
-            browser.close()
-            return content
-
-    except Exception as e:
-        print(f"Error extracting with Playwright: {e}")
+                # Append year since it's usually missing
+                dt = datetime.datetime.strptime(f"{clean_str} {current_year}", f"{fmt} %Y")
+                return dt
+            except ValueError:
+                continue
         return None
 
-def parse_date(date_str):
-    """
-    Parses BookMyShow date strings like "Sun, 9 Feb onwards" or "Fri, 14 Feb".
-    Returns a datetime object if parsable, else None.
-    Assumption: Events are in the current/upcoming year.
-    """
-    if not date_str:
-        return None
+    @staticmethod
+    def get_event_status(event_date):
+        """
+        Determines if an event is Upcoming or Expired.
+        """
+        if not event_date:
+            return STATUS_UNKNOWN
         
-    clean_str = date_str.split(" onwards")[0].strip()
-    current_year = datetime.datetime.now().year
-    
-    try:
-        dt = datetime.datetime.strptime(f"{clean_str} {current_year}", "%a, %d %b %Y")
-        return dt
-    except ValueError:
-        pass
+        today = datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        return STATUS_UPCOMING if event_date >= today else STATUS_EXPIRED
 
-    try:
-        dt = datetime.datetime.strptime(f"{clean_str} {current_year}", "%d %b %Y")
-        return dt
-    except ValueError:
-        return None
+    def parse_events(self, html_content):
+        """
+        Parses HTML to extract event details.
+        """
+        soup = BeautifulSoup(html_content, 'html.parser')
+        events = []
 
-def get_event_status(event_date):
-    """
-    Determines if an event is Upcoming or Expired.
-    """
-    if not event_date:
-        return "Unknown"
-    
-    today = datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    
-    if event_date >= today:
-        return "Upcoming"
-    else:
-        return "Expired"
-
-
-
-def parse_events(html_content, city_name):
-    """
-    Parses HTML to extract event details using BeautifulSoup.
-    """
-    soup = BeautifulSoup(html_content, 'html.parser')
-    events = []
-
-    card_links = soup.find_all('a', href=True)
-    
-    for card in card_links:
-        link = card['href']
-        if '/events/' not in link or 'explore' in link:
-            continue
+        # Use CSS selector for efficiency: finds <a> tags with href containing '/events/'
+        # Excluding 'explore' links to avoid navigational links
+        card_links = soup.select('a[href*="/events/"]')
+        
+        for card in card_links:
+            link = card['href']
+            if 'explore' in link:
+                continue
+                
+            full_link = f"https://in.bookmyshow.com{link}" if link.startswith('/') else link
             
-        full_link = f"https://in.bookmyshow.com{link}" if link.startswith('/') else link
-        
-        text_divs = list(card.stripped_strings)
-        
-        if len(text_divs) < 3:
-            continue 
-            
-        raw_date = text_divs[0] if len(text_divs) > 0 else ""
-        name = text_divs[1] if len(text_divs) > 1 else "Unknown Event"
-        venue = text_divs[2] if len(text_divs) > 2 else "Unknown Venue"
-        category = text_divs[3] if len(text_divs) > 3 else "General"
-        
-        # Basic validation to ensure we grabbed the name, not "Promoted" label
-        if raw_date.lower() == "promoted":
-             raw_date = text_divs[1] if len(text_divs) > 1 else ""
-             name = text_divs[2] if len(text_divs) > 2 else "Unknown Event"
-             venue = text_divs[3] if len(text_divs) > 3 else "Unknown Venue"
-             category = text_divs[4] if len(text_divs) > 4 else "General"
+            # Extract text safely
+            text_items = list(card.stripped_strings)
+            if len(text_items) < 3:
+                continue
 
-        event_date = parse_date(raw_date)
-        status = get_event_status(event_date)
+            # Heuristic to detect valid event card structure
+            # Normal structure: [Date, Name, Venue, Category, ...]
+            # Promoted structure: [Promoted, Date, Name, Venue, Category, ...]
+            start_idx = 0
+            if "promoted" in text_items[0].lower():
+                start_idx = 1
+            
+            # Ensure we have enough items after skipping 'promoted'
+            if len(text_items) < start_idx + 4:
+                continue
+
+            raw_date = text_items[start_idx]
+            name = text_items[start_idx + 1]
+            venue = text_items[start_idx + 2]
+            category = text_items[start_idx + 3]
+
+            event_date = self.parse_date(raw_date)
+            status = self.get_event_status(event_date)
+            
+            events.append({
+                "Event Name": name,
+                "Date": raw_date, # Keeping original string for display
+                "ParsedDate": event_date, # Internal use for sorting/status
+                "Venue": venue,
+                "City": self.city.capitalize(),
+                "Category": category,
+                "Event URL": full_link,
+                "Status": status
+            })
+            
+        return events
+
+    def save_events(self, new_events):
+        """
+        Save events to Excel, merging with existing data.
+        """
+        if not new_events:
+            logger.warning("No events to save.")
+            return
+
+        new_df = pd.DataFrame(new_events)
         
-        events.append({
-            "Event Name": name,
-            "Date": raw_date,
-            "Venue": venue,
-            "City": city_name.capitalize(),
-            "Category": category,
-            "Event URL": full_link,
-            "Status": status
-        })
-        
-    return events
+        if os.path.exists(self.output_file):
+            try:
+                logger.info(f"Found existing file {self.output_file}. Merging data...")
+                existing_df = pd.read_excel(self.output_file)
+                
+                # Combine and deduplicate
+                combined_df = pd.concat([existing_df, new_df], ignore_index=True)
+                
+                # Deduplicate by URL, keeping the newest scraped version
+                df = combined_df.drop_duplicates(subset=['Event URL'], keep='last')
+            except Exception as e:
+                logger.error(f"Error reading existing file: {e}. Starting fresh.")
+                df = new_df
+        else:
+            df = new_df
+
+        # Recalculate status for all events (in case dates have passed since last run)
+        # We need to re-parse the date string if 'ParsedDate' column was lost in CSV/Excel roundtrip
+        # or if we are processing old rows that just have string dates.
+        today = datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+
+        def refresh_status(row):
+            # If we explicitly have a parsed date object (from this run), use it
+            if 'ParsedDate' in row and isinstance(row['ParsedDate'], datetime.datetime):
+                d = row['ParsedDate']
+            else:
+                 # Otherwise try to re-parse the string date
+                d = self.parse_date(row['Date'])
+            
+            return self.get_event_status(d)
+
+        df['Status'] = df.apply(refresh_status, axis=1)
+
+        # Remove internal 'ParsedDate' column before saving if we don't want it in the excel
+        # Or keep it if we want to debug. User didn't specify, but cleaner to remove or keep.
+        # Let's drop it to keep the output file clean as per original format.
+        save_df = df.drop(columns=['ParsedDate'], errors='ignore')
+
+        try:
+            save_df.to_excel(self.output_file, index=False)
+            logger.info(f"Successfully saved {len(save_df)} events to {self.output_file}")
+        except Exception as e:
+            logger.error(f"Error saving to Excel: {e}")
+
+    def run(self):
+        logger.info(f"Starting scrape for {self.city.capitalize()}...")
+        html = self.fetch_page()
+        if html:
+            events = self.parse_events(html)
+            logger.info(f"Found {len(events)} raw events.")
+            self.save_events(events)
+        else:
+            logger.error("Failed to retrieve content. Exiting.")
 
 def main():
-    # Default to Jaipur if no argument provided
     city = "jaipur"
     if len(sys.argv) > 1:
         city = sys.argv[1].lower()
 
-    if city not in CITY_URLS:
-        print(f"Error: City '{city}' not supported.")
-        print(f"Supported cities: {', '.join(CITY_URLS.keys())}")
-        sys.exit(1)
-
-    url = CITY_URLS[city]
-    output_file = f"events_{city}.xlsx"
-
-    print(f"Fetching events for {city.capitalize()} from {url}...")
-    html = fetch_page(url)
-    
-    events = []
-    if html:
-        events = parse_events(html, city)
-        print(f"Found {len(events)} raw events.")
-    else:
-        print("Failed to retrieve content.")
-        # Fallback dummy data if blocked
-        print("Creating dummy data for demonstration purposes...")
-        events = [
-            {"Event Name": "Demo Event 1", "Date": "Sun, 15 Feb onwards", "Venue": "City Venue A", "City": city.capitalize(), "Category": "Music", "Event URL": "https://in.bookmyshow.com/events/demo1", "Status": "Upcoming"},
-            {"Event Name": "Demo Event 2", "Date": "Mon, 10 Feb", "Venue": "City Venue B", "City": city.capitalize(), "Category": "Comedy", "Event URL": "https://in.bookmyshow.com/events/demo2", "Status": "Expired"}
-        ]
-
-    if not events:
-        print("No events found. Check selectors.")
-        return
-
-    new_df = pd.DataFrame(events)
-    
-    # --- Incremental Update Logic ---
-    if os.path.exists(output_file):
-        try:
-            print(f"Found existing file {output_file}. Merging data...")
-            existing_df = pd.read_excel(output_file)
-            
-            # Combine old and new data
-            combined_df = pd.concat([existing_df, new_df], ignore_index=True)
-            
-            # Deduplicate: Keep the 'last' occurrence (fresh scrape data) if URL matches
-            # This updates details if they changed on the site
-            df = combined_df.drop_duplicates(subset=['Event URL'], keep='last')
-        except Exception as e:
-            print(f"Error reading existing file: {e}. Starting fresh.")
-            df = new_df
-    else:
-        df = new_df
-
-    # Recalculate Status for ALL events (old and new)
-    # We need to re-apply the status logic because an old "Upcoming" event might now be "Expired"
-    current_year = datetime.datetime.now().year
-    today = datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-
-    def update_status_row(row):
-        # Use existing parsing logic to determine status
-        try:
-            raw_date = row['Date'] # e.g. "Sun, 9 Feb"
-            if not isinstance(raw_date, str): 
-                return "Unknown"
-            
-            # Use main parsing function
-            event_date = parse_date(raw_date)
-            return get_event_status(event_date)
-        except:
-            return "Unknown"
-
-    # Apply status update
-    df['Status'] = df.apply(update_status_row, axis=1)
-
     try:
-        df.to_excel(output_file, index=False)
-        print(f"Successfully saved {len(df)} events to {output_file} (Merged & Updated)")
+        scraper = EventScraper(city)
+        scraper.run()
+    except ValueError as e:
+        logger.error(str(e))
+        sys.exit(1)
     except Exception as e:
-        print(f"Error saving to Excel: {e}")
+        logger.critical(f"Unexpected error: {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
